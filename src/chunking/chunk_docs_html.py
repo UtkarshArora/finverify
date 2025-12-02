@@ -33,23 +33,26 @@ import re
 
 
 def clean_html_text(html_content: str) -> str:
-    """Aggressively clean SEC HTML and keep mostly narrative text."""
+    """
+    Clean SEC HTML while preserving financial data
+
+    Key insight: We want narrative text WITH numbers (revenue, cash, etc.)
+    We only want to remove pure table junk (column headers, alignment chars)
+    """
     soup = BeautifulSoup(html_content, "html.parser")
 
     # 1. Drop obvious non-content
     for tag in soup(["script", "style", "meta", "link", "head", "noscript"]):
         tag.decompose()
 
-    # 2. Drop tables and layout-y blocks (huge source of numeric junk)
-    for tag in soup(
-        ["table", "thead", "tbody", "tfoot", "tr", "td", "th", "nav", "footer"]
-    ):
-        tag.decompose()
+    # 2. KEEP tables but clean them later
+    # Tables contain important financial data!
+    # We'll filter junk at line level instead
 
     # 3. Extract raw text
     text = soup.get_text(separator=" ", strip=True)
 
-    # 4. De-HTML-entity a bit (if you like)
+    # 4. De-HTML-entity
     replacements = {
         "&nbsp;": " ",
         "&amp;": "&",
@@ -64,23 +67,34 @@ def clean_html_text(html_content: str) -> str:
     for k, v in replacements.items():
         text = text.replace(k, v)
 
-    # 5. Filter out numeric-heavy / tiny lines
+    # 5. Smart filtering: Remove table junk but KEEP financial data
     cleaned_lines = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
 
+        # Skip very short fragments (these are usually junk)
+        if len(line) < 20:
+            continue
+
+        # Skip lines that are ONLY numbers/symbols (table alignment)
+        # But KEEP lines with both text and numbers (financial data!)
         letters = sum(c.isalpha() for c in line)
         digits = sum(c.isdigit() for c in line)
 
-        # Skip mostly-numeric stuff (tables, line items)
-        if digits > 0 and digits >= 2 * max(1, letters):
+        # Must have some letters (not just numbers)
+        if letters < 3:
             continue
 
-        # Skip very short fragments
-        if len(line) < 40:
+        # Skip lines that are pure punctuation/symbols
+        alphanumeric = sum(c.isalnum() for c in line)
+        if alphanumeric < len(line) * 0.3:  # Less than 30% alphanumeric
             continue
+
+        # KEEP everything else - including lines with numbers!
+        # "Total revenue was $265.6 billion" = GOOD
+        # "... ... ..." = BAD (filtered above)
 
         cleaned_lines.append(line)
 
